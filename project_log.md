@@ -648,8 +648,417 @@ docker-compose up -d                   # Start all services
 ---
 
 ## Phase 1: Database Schema & Core Models
-**Status**: 🔜 Pending
-**Start Date**: TBD
+**Status**: ✅ Completed
+**Start Date**: November 14, 2025
+**Completion Date**: November 17, 2025
+
+All database models, schemas, and migrations have been implemented. See earlier entries for details.
+
+---
+
+## Phase 2: Complete Architecture Simplification
+**Date**: November 17, 2025
+**Status**: ✅ Completed
+**Duration**: ~3 hours
+
+### Overview
+Complete overhaul of BOMA architecture to remove all external service dependencies and create a simple, self-hosted, cost-effective solution suitable for solo development and deployment.
+
+---
+
+### Motivation
+
+**Problems with Original Architecture**:
+- Too many external dependencies (Clerk, Cloudinary, Neon, Redis, Celery)
+- High monthly costs ($30-260/month)
+- Complex deployment requiring multiple services
+- Difficult to maintain as solo developer
+- External service rate limits and API issues
+
+**Goals**:
+- Reduce to single VPS deployment
+- Eliminate external service costs
+- Simplify codebase and maintenance
+- Maintain all core features
+- Prepare for production deployment
+
+---
+
+### Changes Implemented
+
+#### 1. Authentication: Clerk → JWT Email/Password
+
+**Removed**:
+- Clerk SDK and dependencies
+- External authentication service
+- Clerk environment variables
+- Mobile app Clerk integration
+
+**Added**:
+- `backend/app/core/security.py` - JWT token generation with bcrypt
+- `backend/app/services/auth_service.py` - Complete auth business logic
+- Email/password registration and login
+- Password reset flow
+- Token refresh mechanism
+- Secure token storage guide for mobile
+
+**Result**: Self-hosted authentication with zero external dependencies
+
+---
+
+#### 2. File Storage: Cloudinary → Local Storage + Nginx
+
+**Removed**:
+- Cloudinary SDK (`cloudinary==1.41.0`)
+- Cloudinary configuration
+- Cloud image upload service
+
+**Added**:
+- `backend/app/services/file_storage_service.py` - Local file storage service
+- Image processing with Pillow (resize, thumbnails, optimization)
+- `backend/uploads/` directory structure (properties, documents, profiles)
+- Static file serving in FastAPI
+- Nginx configuration for production static file serving
+- `.gitignore` rules for uploads directory
+
+**Files Modified**:
+- `backend/app/api/v1/endpoints/properties.py` - Use file_storage_service
+- `backend/app/main.py` - Mount static files with FastAPI
+
+**Result**: All images stored locally, served by Nginx with no recurring costs
+
+---
+
+#### 3. Database: Neon PostgreSQL → Local PostgreSQL
+
+**Removed**:
+- Neon cloud database dependency
+- External database connection
+
+**Updated**:
+- `DATABASE_URL` to use local Docker PostgreSQL
+- Connection string: `postgresql+asyncpg://boma_user:boma_password@localhost:5432/boma_db`
+- Docker Compose already configured with PostgreSQL 16
+
+**Result**: Database runs locally on same VPS, zero hosting costs
+
+---
+
+#### 4. Background Jobs: Removed Redis/Celery
+
+**Removed**:
+- Redis cloud dependency
+- Celery task queue
+- `celery==5.4.0`
+- `redis==5.2.1`
+- Background job infrastructure
+
+**Rationale**:
+- Not needed for MVP
+- Can be added back later if scaling requires it
+- Simpler deployment and maintenance
+
+**Result**: Cleaner codebase, fewer moving parts
+
+---
+
+#### 5. Notifications: Simplified SMTP
+
+**Removed**:
+- Twilio SMS integration
+- SendGrid email service
+- Firebase push notifications
+
+**Added**:
+- Simple SMTP configuration (optional)
+- Can use any SMTP provider (Gmail, etc.)
+
+**Result**: Email notifications when needed, no monthly subscriptions
+
+---
+
+#### 6. Dependencies Cleanup
+
+**Removed from requirements.txt**:
+```
+cloudinary==1.41.0
+celery==5.4.0
+redis==5.2.1
+```
+
+**Added to requirements.txt**:
+```
+Pillow==11.0.0  # Image processing
+```
+
+**Final count**: Reduced from 58 to 49 dependencies
+
+---
+
+#### 7. Configuration Simplification
+
+**backend/.env Changes**:
+- Removed: Clerk config (4 variables)
+- Removed: Cloudinary config (4 variables)
+- Removed: Redis config (3 variables)
+- Removed: Celery config (2 variables)
+- Removed: Twilio config (3 variables)
+- Removed: SendGrid config (3 variables)
+- Removed: Firebase config (3 variables)
+- Added: Local file storage config (3 variables)
+- Updated: DATABASE_URL to local PostgreSQL
+- Updated: Neon → `localhost:5432`
+
+**Total reduction**: ~22 environment variables removed
+
+---
+
+#### 8. Mobile App Updates
+
+**package.json Changes**:
+- Removed: `@clerk/clerk-expo`
+- Removed: `expo-auth-session`
+- Removed: `expo-web-browser`
+- Kept: `expo-secure-store` (for JWT token storage)
+
+**mobile/.env Changes**:
+- Removed: `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- Added: `EXPO_PUBLIC_API_URL=https://api.getboma.org`
+
+**Created**: `MOBILE_AUTH_MIGRATION.md` - Complete guide for implementing JWT auth in mobile app
+
+---
+
+#### 9. Production Configuration
+
+**Domain Setup**:
+- Main domain: `getboma.org`
+- API subdomain: `api.getboma.org`
+- VPS IP: `46.62.233.209`
+
+**AzamPay Webhook**:
+- Updated webhook URL: `https://api.getboma.org/api/v1/bookings/webhooks/azampay`
+- Sandbox credentials maintained
+- Configuration documented in `.env`
+
+**Nginx Configuration**:
+- Created `nginx.conf` for production
+- SSL/TLS via Let's Encrypt
+- Static file serving for uploads
+- Reverse proxy to FastAPI
+- Security headers configured
+
+---
+
+### New Files Created
+
+1. **Backend**:
+   - `backend/app/services/file_storage_service.py` - Local file storage
+   - `backend/uploads/.gitkeep` - Uploads directory structure
+   - `nginx.conf` - Production Nginx configuration
+
+2. **Mobile**:
+   - `mobile/.env.example` - Environment template
+
+3. **Documentation**:
+   - `SIMPLIFICATION_COMPLETE.md` - Complete summary
+   - `MOBILE_AUTH_MIGRATION.md` - Mobile auth guide
+   - `PRODUCTION_DEPLOYMENT.md` - Deployment instructions
+
+---
+
+### Files Modified
+
+1. **Backend Configuration**:
+   - `backend/app/core/config.py` - Removed external service configs
+   - `backend/requirements.txt` - Cleaned up dependencies
+   - `backend/.env` - Simplified to local services
+   - `backend/.env.example` - Updated template
+
+2. **Backend Code**:
+   - `backend/app/main.py` - Added static file serving
+   - `backend/app/api/v1/endpoints/properties.py` - Use local storage
+
+3. **Mobile**:
+   - `mobile/package.json` - Removed Clerk
+   - `mobile/.env` - Updated API URL
+
+4. **Infrastructure**:
+   - `.gitignore` - Added uploads directory rules
+   - `README.md` - Updated architecture documentation
+
+---
+
+### Cost Comparison
+
+**Before Simplification**:
+```
+Clerk:          $25-50/month
+Cloudinary:     $0-89/month
+Neon:           $0-69/month
+Redis Cloud:    $0-7/month
+Twilio:         $0-20/month (optional)
+SendGrid:       $0-15/month (optional)
+VPS:            $5-10/month
+─────────────────────────────
+TOTAL:          $30-260/month
+Annual:         $360-3,120/year
+```
+
+**After Simplification**:
+```
+VPS:            $5-10/month (everything included)
+Domain:         $12/year (~$1/month)
+─────────────────────────────
+TOTAL:          $6-11/month
+Annual:         $72-132/year
+```
+
+**Savings**: $24-249/month ($288-2,988/year) = **~95% cost reduction**
+
+---
+
+### Technical Benefits
+
+✅ **Zero External Dependencies** (except AzamPay for payments)
+✅ **Single VPS Deployment** (easier ops)
+✅ **Complete Data Control** (privacy and security)
+✅ **No API Rate Limits** (no external service quotas)
+✅ **Faster Development** (no external service delays)
+✅ **Simpler Debugging** (all code in one place)
+✅ **Easy Backups** (single database, local files)
+✅ **Scalable Architecture** (can add services back when needed)
+
+---
+
+### What Still Works
+
+✅ **Authentication**: Email/password registration & login with JWT
+✅ **Database**: PostgreSQL with all models and relationships
+✅ **File Storage**: Image uploads with optimization and thumbnails
+✅ **Property Management**: Full CRUD operations
+✅ **Bookings**: Complete booking lifecycle
+✅ **Payments**: AzamPay integration for mobile money
+✅ **Reviews**: Guest and host review system
+✅ **API**: FastAPI with automatic documentation
+✅ **Mobile App**: Expo/React Native ready for JWT auth
+
+---
+
+### Deployment Readiness
+
+**Production Stack**:
+- VPS: 46.62.233.209
+- Domain: getboma.org
+- API: api.getboma.org
+- Database: Local PostgreSQL (Docker)
+- Web Server: Nginx
+- SSL: Let's Encrypt
+- Backend: FastAPI (systemd service)
+
+**Deployment Status**:
+- [x] VPS provisioned
+- [x] Domain purchased
+- [x] DNS configured
+- [x] Backend simplified
+- [x] Mobile app updated
+- [x] Documentation created
+- [ ] SSL certificates (pending)
+- [ ] Final deployment (pending)
+
+See `PRODUCTION_DEPLOYMENT.md` for complete deployment guide.
+
+---
+
+### Security Improvements
+
+✅ **JWT Secret Key**: Strong random key generated
+✅ **Password Hashing**: Bcrypt with proper salting
+✅ **CORS**: Configured for production domain
+✅ **File Validation**: Upload type and size checks
+✅ **Nginx Security Headers**: XSS, clickjacking protection
+✅ **HTTPS**: SSL/TLS ready
+✅ **Environment Variables**: No secrets in code
+✅ **Database**: Local, not exposed to internet
+
+---
+
+### Testing Status
+
+**Backend**:
+- ✅ Health check endpoint works
+- ✅ User registration works
+- ✅ User login returns JWT
+- ✅ JWT authentication works
+- ✅ Property creation works
+- ✅ File upload works (local storage)
+- ✅ Static files served correctly
+- ✅ Database migrations run successfully
+
+**Mobile App**:
+- ⏳ Requires code updates (see MOBILE_AUTH_MIGRATION.md)
+- ✅ Package dependencies updated
+- ✅ API URL configured
+- ⏳ JWT auth screens to be implemented
+
+**Integration**:
+- ⏳ AzamPay webhook to be tested in production
+- ⏳ End-to-end booking flow to be tested
+
+---
+
+### Next Steps
+
+**Immediate (Ready Now)**:
+1. Deploy backend to VPS
+2. Configure SSL with Let's Encrypt
+3. Set up systemd service
+4. Configure Nginx
+5. Run database migrations
+6. Test API endpoints
+
+**Mobile App (1-2 days)**:
+1. Implement auth screens (login/register)
+2. Create auth store with Zustand
+3. Update API client for JWT
+4. Test mobile app flow
+
+**Production Launch (Week 1)**:
+1. Configure AzamPay production webhook
+2. Set up database backups
+3. Configure monitoring
+4. Load test API
+5. Security audit
+6. Soft launch
+
+---
+
+### Lessons Learned
+
+**What Worked Well**:
+- Starting with email/password auth (already in models!)
+- Docker Compose for local PostgreSQL
+- Pillow for image processing
+- FastAPI static file serving
+- Comprehensive documentation
+
+**What Was Challenging**:
+- Removing Clerk while preserving auth functionality
+- Ensuring all Cloudinary references updated
+- Mobile app dependency management (React 19 peer deps)
+
+**Best Practices Established**:
+- Keep external dependencies minimal
+- Design for self-hosting from start
+- Document all configuration
+- Use environment variables properly
+- Test locally before deploying
+
+---
+
+### Acknowledgments
+
+All changes were made to create a production-ready, cost-effective, maintainable platform suitable for solo development and scaling.
 
 ---
 
