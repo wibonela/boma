@@ -1,0 +1,459 @@
+OVERVIEW FOR AZAMPAY CALL
+
+  What We Built
+
+  A complete payment integration supporting:
+  - Mobile Money: M-Pesa, Airtel, Tigo, Halopesa, Azampesa
+  - Card Payments: Via AzamPay checkout redirect
+  - Webhook Callbacks: For payment status updates
+
+  ---
+  📁 FOLDER-BY-FOLDER IMPLEMENTATION
+
+  1️⃣ /backend/app/core/config.py - Configuration
+
+  What it does: Stores AzamPay credentials from environment variables
+
+  Your credentials (lines 61-64):
+  CLOUDINARY_CLOUD_NAME: str
+  CLOUDINARY_API_KEY: str
+  CLOUDINARY_API_SECRET: str
+  CLOUDINARY_FOLDER: str = "boma"
+
+  AzamPay credentials in .env.example (lines 49-54):
+  AZAMPAY_CLIENT_ID=ed3c0530-f27a-4faa-b9f4-fd838418f8de
+  AZAMPAY_CLIENT_SECRET=[your_secret]
+  AZAMPAY_APP_NAME=boma
+  AZAMPAY_API_URL=https://sandbox.azampay.co.tz
+  AZAMPAY_WEBHOOK_SECRET=6f4f0b8c7dbe46e29d1a2f4a8d09c5de
+
+  ---
+  2️⃣ /backend/app/services/azampay_service.py - Payment Service Layer
+
+  What it does: Core integration with AzamPay API
+
+  Key Functions:
+
+  A. Token Management (lines 28-69)
+
+  async def _get_access_token(self) -> str
+  - Endpoint:
+  https://authenticator-sandbox.azampay.co.tz/AppRegistration/GenerateToken
+  - Caching: Tokens cached for 55 minutes (expire in 60)
+  - Payload: {appName, clientId, clientSecret}
+  - ✅ Working: Yes
+
+  B. Mobile Money Checkout (lines 71-163)
+
+  async def initiate_mno_checkout(
+      account_number: str,  # Phone number
+      amount: float,
+      external_id: str,     # Our booking ID
+      provider: str,        # Mpesa, Airtel, etc.
+      currency: str = "TZS"
+  )
+  - Endpoint: {api_url}/azampay/mno/checkout
+  - Phone Format: Automatically converts to 255XXXXXXXXX
+  - Supported Providers: Mpesa, Airtel, Tigo, Halopesa, Azampesa
+  - Returns: {success, transaction_id, message}
+  - ✅ Working: Checkout initiates successfully
+
+  C. Card Payment Checkout (lines 165-263)
+
+  async def initiate_card_checkout(
+      amount: float,
+      external_id: str,
+      currency: str = "TZS",
+      customer_email: Optional[str] = None,
+      customer_phone: Optional[str] = None
+  )
+  - Endpoint: {api_url}/azampay/checkout
+  - Returns: checkout_url - User redirected to this URL
+  - Flow: App → Checkout URL → User enters card → AzamPay redirects back
+  - ✅ Working: Fixed UUID serialization bug, now working
+
+  D. Webhook Handler (lines 300-342)
+
+  async def handle_webhook(payload: Dict[str, Any])
+  - Expected Payload:
+  {
+    "transactionId": "string",
+    "externalId": "string",      // Our booking ID
+    "amount": number,
+    "status": "success|failed",
+    "message": "string"
+  }
+  - ⚠️ NOT TESTED: Webhooks not received yet
+
+  ---
+  3️⃣ /backend/app/api/v1/endpoints/bookings.py - API Endpoints
+
+  A. Mobile Money Payment Endpoint (lines 338-460)
+
+  POST /bookings/{booking_id}/payment/mobile-money
+  Request Body:
+  {
+    "phone_number": "0712345678",  // or 255712345678
+    "provider": "Mpesa"            // Mpesa|Airtel|Tigo|Halopesa|Azampesa
+  }
+
+  Process:
+  1. Validates booking exists and user authorized
+  2. Checks booking status (must be AWAITING_PAYMENT or PENDING)
+  3. Creates Payment record with status PENDING
+  4. Calls azampay_service.initiate_mno_checkout()
+  5. Updates payment with transaction_id
+  6. Returns payment details
+
+  ✅ Working: Yes, checkout initiates
+
+  B. Card Payment Endpoint (lines 463-597)
+
+  POST /bookings/{booking_id}/payment/card
+  Request Body:
+  {
+    "customer_email": "user@example.com",  // Optional
+    "customer_phone": "0712345678"         // Optional
+  }
+
+  Process:
+  1. Same validation as mobile money
+  2. Creates Payment record
+  3. Calls azampay_service.initiate_card_checkout()
+  4. Returns checkout_url in response
+  5. Mobile app opens checkout_url in browser
+
+  Response:
+  {
+    "id": "payment_id",
+    "provider": "https://checkout.azampay.co.tz/...",  // Checkout URL
+    "message": "Redirect user to checkout URL"
+  }
+
+  ✅ Working: Yes, after fixing UUID bug
+
+  C. Webhook Endpoint (lines 600-669)
+
+  POST /bookings/webhooks/azampay
+  Public URL: https://fungicidally-uninfective-neville.ngrok-free.dev/api/v1/bo
+  okings/webhooks/azampay
+
+  Process:
+  1. Receives webhook payload
+  2. Calls azampay_service.handle_webhook()
+  3. Finds booking by external_id
+  4. Finds payment record
+  5. Updates payment status:
+    - success → Payment SUCCESS, Booking CONFIRMED
+    - failed → Payment FAILED
+  6. Stores webhook payload in payment.extra_data
+
+  ❌ NOT WORKING: Not receiving callbacks
+
+  ---
+  4️⃣ /backend/app/models/ - Database Models
+
+  A. Payment Model (payment.py)
+
+  class Payment(BaseModel):
+      id: UUID
+      booking_id: UUID
+      guest_id: UUID
+      amount: Decimal
+      currency: str
+      payment_method: PaymentMethod  # CARD, MOBILE_MONEY
+      phone_number: str
+      status: TransactionStatus  # PENDING, SUCCESS, FAILED
+      gateway: PaymentGateway    # AZAMPAY
+      gateway_reference: str     # AzamPay transaction_id
+      paid_at: Optional[datetime]
+      extra_data: dict          # Full webhook payload stored here
+
+  B. Booking Model (booking.py)
+
+  class Booking(BaseModel):
+      id: UUID
+      guest_id: UUID
+      property_id: UUID
+      status: BookingStatus      # PENDING, CONFIRMED, CANCELLED, etc.
+      payment_status: PaymentStatusEnum  # UNPAID, PAID, REFUNDED
+      total_price: Decimal
+      currency: str
+
+  ---
+  5️⃣ /mobile/src/screens/booking/PaymentScreen.tsx - Mobile UI
+
+  Two Payment Modes:
+
+  A. Mobile Money (lines 136-195)
+
+  1. User selects provider (M-Pesa, Airtel, etc.)
+  2. Enters phone number (validates Tanzania format)
+  3. Calls API: POST /bookings/{id}/payment/mobile-money
+  4. Shows "Check your phone" message
+  5. Waits for webhook to update status
+
+  B. Card Payment (lines 89-134)
+
+  1. User enters email (optional)
+  2. Calls API: POST /bookings/{id}/payment/card
+  3. Receives checkout_url
+  4. Opens URL in device browser using Linking.openURL()
+  5. User enters card details on AzamPay page
+  6. After payment, redirects back (webhook updates status)
+
+  ✅ Working: Both flows implemented
+
+  ---
+  ⚠️ WHAT'S MISSING - CRITICAL FOR AZAMPAY CALL
+
+  1. Webhook Registration ❌
+
+  Problem: Webhook URL not registered with AzamPay sandbox
+
+  Your Webhook URL:
+  https://fungicidally-uninfective-neville.ngrok-free.dev/api/v1/bookings/webho
+  oks/azampay
+
+  What to ask AzamPay:
+  - "Can you register this webhook URL for our sandbox app?"
+  - "Do we need to provide it during app registration or via dashboard?"
+  - "What's the webhook timeout period?"
+
+  2. Webhook Signature Verification ⚠️
+
+  Current Status: Placeholder implementation (returns true)
+
+  Code Location: backend/app/services/azampay_service.py:284-298
+
+  def verify_webhook_signature(self, payload: Dict, signature: str) -> bool:
+      # TODO: Implement signature verification
+      logger.warning("Webhook signature verification not yet implemented")
+      return True
+
+  What to ask AzamPay:
+  - "What hashing algorithm do you use? (HMAC-SHA256?)"
+  - "Which fields are included in signature calculation?"
+  - "What header contains the signature?"
+  - "Can you provide a sample webhook with signature?"
+
+  3. Payment Status Verification API ⚠️
+
+  Current Status: Not available in AzamPay docs
+
+  Code Location: backend/app/services/azampay_service.py:265-282
+
+  async def verify_payment(self, transaction_id: str):
+      logger.warning("Payment verification called but not implemented")
+      return {"message": "Use webhook callbacks"}
+
+  What to ask AzamPay:
+  - "Do you have a GET endpoint to check transaction status?"
+  - "Can we poll transaction status if webhook fails?"
+  - "Endpoint format: /transactions/{id}/status?"
+
+  4. Card Payment Return URL ⚠️
+
+  Current: Card checkout redirects but no return URL configured
+
+  What to ask AzamPay:
+  - "Can we specify a return URL after card payment?"
+  - "What URL format? Deep link or web URL?"
+  - "Do you send transaction status in URL params?"
+
+  5. Testing & Reconciliation ⚠️
+
+  What to ask:
+  - "Test card numbers for sandbox?"
+  - "Test phone numbers that auto-succeed/fail?"
+  - "Daily reconciliation file format?"
+  - "Bulk transaction status check API?"
+
+  ---
+  ✅ WHAT'S WORKING
+
+  1. ✅ Token Generation: Getting access tokens successfully
+  2. ✅ Mobile Money Checkout: Initiation works, prompts appear on phone
+  3. ✅ Card Checkout: Checkout URL generated, opens in browser
+  4. ✅ Database Models: Payments and bookings tracked properly
+  5. ✅ Error Handling: Failed payments marked as FAILED
+  6. ✅ Phone Number Formatting: Auto-converts 0712... to 255712...
+  7. ✅ UUID Bug Fixed: Payment initiation no longer fails on serialization
+
+  ---
+  🚧 CURRENT ISSUES
+
+  Issue 1: Webhooks Not Received
+
+  Status: Mobile money checkout initiated, but no callback received
+
+  Possible Causes:
+  1. Webhook URL not registered in sandbox
+  2. Network timeout (ngrok URL unreachable?)
+  3. Webhook sent but endpoint validation failed
+
+  Evidence:
+  - Backend logs show "Payment initiated successfully"
+  - Backend logs show no incoming webhook requests
+  - AzamPay docs say: "URL must be registered during app creation"
+
+  Issue 2: No Webhook Test Tool
+
+  Need: Way to test webhook endpoint manually
+
+  Ask AzamPay:
+  - "Do you have a webhook testing tool in dashboard?"
+  - "Can you manually trigger a test webhook?"
+
+  ---
+  📊 PAYMENT FLOW DIAGRAM
+
+  MOBILE MONEY FLOW:
+  ┌─────────────┐
+  │  User       │
+  │  Selects    │──1. Select M-Pesa + Phone
+  │  Provider   │
+  └──────┬──────┘
+         │
+         │ 2. POST /payment/mobile-money
+         ▼
+  ┌──────────────────┐
+  │  Backend         │──3. Create Payment (status=PENDING)
+  │  (bookings.py)   │
+  └────────┬─────────┘
+           │
+           │ 4. azampay_service.initiate_mno_checkout()
+           ▼
+  ┌─────────────────────┐
+  │  AzamPay API        │──5. Token + MNO Checkout Request
+  │  (Sandbox)          │
+  └──────────┬──────────┘
+             │
+             │ 6. Returns transaction_id
+             ▼
+  ┌──────────────────┐
+  │  Backend         │──7. Update payment.gateway_reference
+  │  Stores txn_id   │
+  └──────────────────┘
+             │
+             │ 8. User gets prompt on phone
+             ▼
+  ┌──────────────────┐
+  │  User            │──9. Enters PIN, confirms
+  │  Phone Prompt    │
+  └──────────┬───────┘
+             │
+             │ 10. Webhook callback (NOT RECEIVED YET)
+             ▼
+  ┌──────────────────┐
+  │  Backend         │──11. Update Payment SUCCESS
+  │  Webhook         │──12. Update Booking CONFIRMED
+  └──────────────────┘
+
+  CARD PAYMENT FLOW:
+  User → API → AzamPay Checkout URL → Browser → Card Entry →
+  Webhook → Payment SUCCESS
+
+  ---
+  🎯 QUESTIONS FOR AZAMPAY DEVELOPERS
+
+  CRITICAL (Must resolve to go live):
+
+  1. Webhook Registration:
+    - How do we register webhook URL for sandbox?
+    - Can you register it now: https://fungicidally-uninfective-neville.ngrok-f
+  ree.dev/api/v1/bookings/webhooks/azampay?
+  2. Webhook Security:
+    - What signature algorithm? (HMAC-SHA256?)
+    - Which header contains signature?
+    - Can you provide sample webhook with signature?
+  3. Testing:
+    - Test phone numbers that auto-succeed/fail?
+    - Test card numbers?
+    - Can you manually trigger test webhook to our URL?
+
+  IMPORTANT (Needed for production):
+
+  4. Card Payment Return:
+    - Can we set return URL after card payment?
+    - Deep link support for mobile apps?
+  5. Transaction Verification:
+    - API to check transaction status?
+    - Reconciliation file format?
+  6. Error Handling:
+    - Webhook retry policy?
+    - Webhook timeout duration?
+    - Failed webhook notification?
+
+  NICE TO HAVE:
+
+  7. Features:
+    - Refund API availability?
+    - Partial payment support?
+    - Recurring payments?
+
+  ---
+  🔄 NEXT PHASE - AFTER AZAMPAY CALL
+
+  Phase 1: Complete Integration (Week 1)
+
+  - Register webhook URL with AzamPay
+  - Test webhooks (mobile money + card)
+  - Implement signature verification
+  - Add transaction status verification API
+  - Test with test cards/phones
+
+  Phase 2: Production Hardening (Week 2)
+
+  - Move from sandbox to production credentials
+  - Set up production webhook URL (not ngrok)
+  - Implement webhook retry mechanism
+  - Add daily reconciliation job
+  - Set up payment monitoring/alerts
+
+  Phase 3: Advanced Features (Week 3-4)
+
+  - Refund processing
+  - Split payments (host payout automation)
+  - Payment analytics dashboard
+  - Failed payment recovery flow
+  - Multi-currency support
+
+  Phase 4: Scale & Optimize (Month 2)
+
+  - Add Selcom as alternative gateway
+  - Implement payment gateway fallback
+  - Add card tokenization (future)
+  - Optimize webhook processing (background jobs)
+  - Add fraud detection rules
+
+  ---
+  📝 SUMMARY FOR YOUR CALL
+
+  What we've built:
+  - Complete payment integration with mobile money & cards
+  - Proper database models for payments & bookings
+  - Error handling and logging
+  - Mobile UI for both payment types
+
+  What works:
+  - Payment initiation (both mobile & card)
+  - Token management
+  - Phone number formatting
+  - Error handling
+
+  What's blocked:
+  - Webhooks not received (URL not registered)
+  - Cannot test payment completion flow
+  - Cannot confirm booking after payment
+
+  What we need from AzamPay:
+  1. Register our webhook URL
+  2. Provide webhook signature verification details
+  3. Test credentials (test cards, test phones)
+  4. Confirm our implementation approach
+  5. Discuss return URL for card payments
+
+  Our webhook URL:
+  https://fungicidally-uninfective-neville.ngrok-free.dev/api/v1/bookings/webho
+  oks/azampay
